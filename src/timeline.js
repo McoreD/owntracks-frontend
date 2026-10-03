@@ -102,11 +102,17 @@ export const placeName = (points) => {
  * Turn a device's locations into a sequence of stays and moves, the way a
  * "day timeline" presents them.
  *
+ * A location may carry `departed` (unix seconds): the device is known to have
+ * left that place then (e.g. from a region leave event). The stay ends at that
+ * time instead of being extended over a following silence, and the next
+ * location starts a new stay even at the same place.
+ *
  * @param {OTLocation[]} locations Locations of a single device
  * @param {Partial<TimelineOptions>} [options]
  * @returns {Array<Object>} Segments in chronological order. Stays have
  *   `{ type: "stay", start, end, center, place, count, endIsLast }`, moves have
- *   `{ type: "move", start, end, distance, latLngs }`. Times are unix seconds.
+ *   `{ type: "move" | "away", start, end, distance, latLngs }` ("away": left
+ *   and returned to the same place). Times are unix seconds.
  */
 export const buildTimeline = (locations, options = {}) => {
   const opts = { ...DEFAULT_TIMELINE_OPTIONS, ...options };
@@ -130,9 +136,11 @@ export const buildTimeline = (locations, options = {}) => {
   let current = [points[0]];
   for (let i = 1; i < points.length; i++) {
     const p = points[i];
+    const departed = typeof points[i - 1].departed === "number";
     if (
+      !departed &&
       distanceBetweenCoordinates(centroid(current), toLatLng(p)) <=
-      opts.stayRadius
+        opts.stayRadius
     ) {
       current.push(p);
     } else {
@@ -150,9 +158,13 @@ export const buildTimeline = (locations, options = {}) => {
     let end = cluster[cluster.length - 1].tst;
     const next = clusters[i + 1];
     const isLast = next === undefined;
-    // Long silence before the next report elsewhere: we were still here,
-    // until roughly the time it takes to get to the next place.
-    if (!isLast && next[0].tst - end > gap) {
+    const departed = cluster[cluster.length - 1].departed;
+    if (typeof departed === "number") {
+      // Known departure time: no guessing over the silence that follows.
+      end = Math.max(end, departed);
+    } else if (!isLast && next[0].tst - end > gap) {
+      // Long silence before the next report elsewhere: we were still here,
+      // until roughly the time it takes to get to the next place.
       const distance = distanceBetweenCoordinates(
         centroid(cluster),
         toLatLng(next[0])
@@ -185,11 +197,15 @@ export const buildTimeline = (locations, options = {}) => {
     }
     const start = previousStay ? previousStay.end : pending[0].tst;
     const end = nextStay ? nextStay.start : pending[pending.length - 1].tst;
+    const distance = pathDistance(latLngs);
     segments.push({
-      type: "move",
+      // Left and came back to the same place without moving data in between
+      // (e.g. a lunch break): "away" rather than a zero-length move.
+      type:
+        pending.length === 0 && distance <= opts.stayRadius ? "away" : "move",
       start,
       end: Math.max(start, end),
-      distance: pathDistance(latLngs),
+      distance,
       latLngs,
     });
     pending = [];

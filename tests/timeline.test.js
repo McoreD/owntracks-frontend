@@ -159,3 +159,32 @@ describe("addressLabel", () => {
     );
   });
 });
+
+describe("departed", () => {
+  test("a known departure ends the stay and splits a return visit", () => {
+    // OMTID 09:14-11:43 and 12:38-16:46 (manual visits), home at 22:31.
+    const segments = buildTimeline([
+      at(WORK, 9 * 60 + 14),
+      at(WORK, 11 * 60 + 43, { departed: T0 + (11 * 60 + 43) * 60 }),
+      at(WORK, 12 * 60 + 38),
+      at(WORK, 16 * 60 + 46, { departed: T0 + (16 * 60 + 46) * 60 }),
+      at(HOME, 22 * 60 + 31),
+    ]);
+    expect(segments.map((s) => s.type)).toEqual([
+      "stay",
+      "away",
+      "stay",
+      "move",
+      "stay",
+    ]);
+    expect(segments[0].end).toBe(T0 + (11 * 60 + 43) * 60);
+    expect(segments[1].end - segments[1].start).toBe(55 * 60);
+    expect(segments[2].end).toBe(T0 + (16 * 60 + 46) * 60);
+    expect(segments[3].start).toBe(T0 + (16 * 60 + 46) * 60);
+  });
+
+  test("without departed a silence still extends the stay", () => {
+    const segments = buildTimeline([at(WORK, 0), at(WORK, 60), at(HOME, 600)]);
+    expect(segments[0].end).toBeGreaterThan(T0 + 500 * 60);
+  });
+});

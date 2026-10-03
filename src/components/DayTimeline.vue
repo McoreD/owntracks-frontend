@@ -129,6 +129,12 @@
                 · {{ humanReadableDuration(segment.end - segment.start) }}
               </small>
             </template>
+            <template v-else-if="segment.type === 'away'">
+              <span>{{ $t("Away") }}</span>
+              <small>
+                {{ humanReadableDuration(segment.end - segment.start) }}
+              </small>
+            </template>
             <template v-else>
               <span>{{ $t("Moving") }}</span>
               <small>
