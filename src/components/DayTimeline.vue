@@ -40,7 +40,15 @@
         >
           <ChevronLeftIcon size="1x" :aria-label="$t('Previous month')" />
         </button>
-        <span>{{ month.format("MMMM YYYY") }}</span>
+        <button
+          class="button button-flat calendar-title"
+          :title="$t('Jump to a year, month or date')"
+          :aria-expanded="jumpOpen ? 'true' : 'false'"
+          @click="toggleJump"
+        >
+          {{ month.format("MMMM YYYY") }}
+          <ChevronDownIcon size="0.9x" aria-hidden="true" />
+        </button>
         <button
           v-if="showMonth"
           class="button button-flat button-icon"
@@ -59,7 +67,62 @@
           {{ monthExpanded ? $t("Week") : $t("Month") }}
         </button>
       </div>
-      <div class="calendar-grid" role="grid">
+      <div v-if="jumpOpen" class="calendar-jump">
+        <div class="jump-year">
+          <button
+            class="button button-flat button-icon"
+            :title="$t('Previous year')"
+            :disabled="jumpYear <= minYear"
+            @click="jumpYear--"
+          >
+            <ChevronLeftIcon size="1x" :aria-label="$t('Previous year')" />
+          </button>
+          <select v-model.number="jumpYear" :aria-label="$t('Year')">
+            <option v-for="year in years" :key="year" :value="year">
+              {{ year }}
+            </option>
+          </select>
+          <button
+            class="button button-flat button-icon"
+            :title="$t('Next year')"
+            :disabled="jumpYear >= today.year()"
+            @click="jumpYear++"
+          >
+            <ChevronRightIcon size="1x" :aria-label="$t('Next year')" />
+          </button>
+        </div>
+        <div class="jump-months">
+          <button
+            v-for="(name, index) in monthNames"
+            :key="name"
+            class="jump-month"
+            :class="{
+              'jump-month-current':
+                jumpYear === month.year() && index === month.month(),
+            }"
+            :disabled="
+              jumpYear > today.year() ||
+              (jumpYear === today.year() && index > today.month())
+            "
+            @click="pickMonth(index)"
+          >
+            {{ name }}
+          </button>
+        </div>
+        <div class="jump-date">
+          <input
+            type="date"
+            :max="today.format('YYYY-MM-DD')"
+            :value="day.format('YYYY-MM-DD')"
+            :aria-label="$t('Go to date')"
+            @change="goToDate($event.target.value)"
+          />
+          <button class="button button-flat jump-today" @click="goToday">
+            {{ $t("Today") }}
+          </button>
+        </div>
+      </div>
+      <div v-else class="calendar-grid" role="grid">
         <span
           v-for="weekday in weekdays"
           :key="weekday"
@@ -153,6 +216,7 @@
 import moment from "moment";
 import { mapActions, mapMutations, mapState } from "vuex";
 import {
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   MapPinIcon,
@@ -182,6 +246,7 @@ const addressCache = {};
 
 export default {
   components: {
+    ChevronDownIcon,
     ChevronLeftIcon,
     ChevronRightIcon,
     MapPinIcon,
@@ -195,6 +260,8 @@ export default {
       monthAbortController: null,
       // On small screens only the selected week is shown until expanded
       monthExpanded: false,
+      jumpOpen: false,
+      jumpYear: moment().year(),
       addresses: { ...addressCache },
       geocodeRun: 0,
       today: moment().startOf("day"),
@@ -273,6 +340,17 @@ export default {
       }
       return cells;
     },
+    minYear() {
+      return this.today.year() - 30;
+    },
+    years() {
+      const years = [];
+      for (let y = this.today.year(); y >= this.minYear; y--) years.push(y);
+      return years;
+    },
+    monthNames() {
+      return moment.monthsShort();
+    },
     showMonth() {
       return this.$mq !== "sm" || this.monthExpanded;
     },
@@ -312,7 +390,11 @@ export default {
     this.month = this.day.clone().startOf("month");
     this.loadMonth();
   },
+  mounted() {
+    window.addEventListener("keydown", this.onKeydown);
+  },
   beforeDestroy() {
+    window.removeEventListener("keydown", this.onKeydown);
     this.geocodeRun++;
     if (this.monthAbortController) this.monthAbortController.abort();
   },
@@ -392,6 +474,47 @@ export default {
     },
     shiftMonth(delta) {
       this.month = this.month.clone().add(delta, "months");
+    },
+    toggleJump() {
+      this.jumpOpen = !this.jumpOpen;
+      this.jumpYear = this.month.year();
+    },
+    pickMonth(index) {
+      this.month = moment({ year: this.jumpYear, month: index, day: 1 });
+      this.jumpOpen = false;
+    },
+    goToDate(value) {
+      const date = moment(value, "YYYY-MM-DD", true);
+      if (!date.isValid()) return;
+      this.selectDay(moment.min(date, this.today));
+      this.jumpOpen = false;
+    },
+    goToday() {
+      this.selectDay(this.today);
+      this.jumpOpen = false;
+    },
+    /**
+     * Arrow keys move the selected day, Shift + arrows by a month, unless the
+     * key is meant for a form field or the map.
+     */
+    onKeydown(event) {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target;
+      if (
+        target &&
+        target.closest &&
+        target.closest("input, select, textarea, .leaflet-container")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const delta = event.key === "ArrowLeft" ? -1 : 1;
+      const next = this.day
+        .clone()
+        .add(delta, event.shiftKey ? "months" : "days");
+      if (next.isAfter(this.today, "day")) return;
+      this.selectDay(next);
     },
     close() {
       this.setTimelineOpen(false);
@@ -497,6 +620,94 @@ export default {
   padding: 4px 10px;
   font-size: 13px;
   font-weight: normal;
+  color: var(--color-primary);
+  border: 1px solid var(--color-separator);
+}
+
+.button.button-flat.calendar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-weight: bold;
+  color: var(--color-text);
+
+  &:hover,
+  &[aria-expanded="true"] {
+    background: var(--color-separator);
+  }
+}
+
+.calendar-jump {
+  padding: 6px 0 2px;
+}
+
+.jump-year {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  select {
+    font: inherit;
+    font-weight: bold;
+    padding: 4px 8px;
+    color: var(--color-text);
+    background: var(--color-background);
+    border: 1px solid var(--color-separator);
+    border-radius: 6px;
+  }
+}
+
+.jump-months {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.jump-month {
+  padding: 8px 0;
+  font: inherit;
+  font-size: 14px;
+  color: inherit;
+  background: none;
+  border: 1px solid var(--color-separator);
+  border-radius: 6px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--color-separator);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+
+  &.jump-month-current {
+    color: var(--color-primary-text);
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+  }
+}
+
+.jump-date {
+  display: flex;
+  gap: 8px;
+
+  input {
+    flex: 1;
+    font: inherit;
+    padding: 6px 8px;
+    color: var(--color-text);
+    background: var(--color-background);
+    border: 1px solid var(--color-separator);
+    border-radius: 6px;
+  }
+}
+
+.button.button-flat.jump-today {
   color: var(--color-primary);
   border: 1px solid var(--color-separator);
 }
