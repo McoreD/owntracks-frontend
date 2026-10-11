@@ -2,6 +2,30 @@
   <section class="place-editor" :aria-label="$t('Edit place')">
     <strong>{{ $t("Choose the place you visited") }}</strong>
     <form class="place-search" @submit.prevent="search">
+      <div class="place-search-kind">
+        <label>
+          <input
+            v-model="kind"
+            type="radio"
+            :name="inputId + '-kind'"
+            value="place"
+            :disabled="saving"
+            @change="clearResults"
+          />
+          {{ $t("Place name") }}
+        </label>
+        <label>
+          <input
+            v-model="kind"
+            type="radio"
+            :name="inputId + '-kind'"
+            value="address"
+            :disabled="saving"
+            @change="clearResults"
+          />
+          {{ $t("Address") }}
+        </label>
+      </div>
       <label :for="inputId">{{ $t("Place name or address") }}</label>
       <div class="place-search-fields">
         <input
@@ -103,6 +127,7 @@ export default {
   data() {
     return {
       query: this.currentName,
+      kind: "place",
       results: [],
       selected: null,
       searched: false,
@@ -153,6 +178,7 @@ export default {
       try {
         const url = new URL(this.searchUrl, window.location.href);
         url.searchParams.set("q", this.query.trim());
+        url.searchParams.set("kind", this.kind);
         url.searchParams.set("device", this.device);
         url.searchParams.set("tst", this.tst);
         const response = await fetch(url, { signal: controller.signal });
@@ -246,6 +272,19 @@ export default {
 }
 .place-search {
   margin: 12px 0;
+}
+.place-search-kind {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  input {
+    width: auto;
+  }
 }
 .place-search-fields {
   display: flex;

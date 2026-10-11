@@ -652,7 +652,8 @@ the mapped name, address, distance and an OpenStreetMap link; selecting one
 previews it on the map. Only a selected result can be saved. Corrections take
 priority over automatic names and can be reset with **Use detected place**.
 
-The search endpoint accepts GET `q`, `device`, `tst` and returns `{ results }`.
+The search endpoint accepts GET `q`, `device`, `tst`, and `kind` (`place`, the
+default, or `address`), and returns `{ results }`.
 Each result has `osmType` (`node`, `way` or `relation`), `osmId`, `name`, `address`,
 `lat`, `lon`, `distance` (meters) and `mapUrl`. The correction endpoint accepts
 POST `{ device, tst, osmType, osmId }` and DELETE `{ device, tst }` to reset, and
