@@ -207,6 +207,27 @@
             </template>
           </span>
         </button>
+        <button
+          v-if="segment.type === 'stay' && canEditPlaces"
+          class="button button-flat segment-edit"
+          :aria-label="$t('Edit place: {place}', { place: stayLabel(segment) })"
+          @click="editPlace(segment)"
+        >
+          {{ $t("Edit place") }}
+        </button>
+        <PlaceEditor
+          v-if="editing && editing.segment.start === segment.start"
+          :key="`${editing.user}/${editing.device}/${segment.start}`"
+          :device="editing.device"
+          :tst="segment.placeTst || segment.start"
+          :current-name="stayLabel(segment)"
+          :corrected="segment.placeSource === 'manual'"
+          :search-url="$config.timeline.placeSearchUrl"
+          :correction-url="$config.timeline.placeCorrectionUrl"
+          @preview="previewPlace"
+          @saved="applyPlaceCorrection"
+          @cancel="cancelPlaceEdit"
+        />
       </li>
     </ol>
   </aside>
@@ -225,6 +246,7 @@ import {
 } from "vue-feather-icons";
 
 import * as api from "@/api";
+import PlaceEditor from "@/components/PlaceEditor.vue";
 import { DATE_TIME_FORMAT } from "@/constants";
 import { log } from "@/logging";
 import * as types from "@/store/mutation-types";
@@ -243,9 +265,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Reverse geocoding results for the page's lifetime, keyed by rounded
 // coordinate (null: looked up, no address). Shared across panel re-opens.
 const addressCache = {};
+// Source of each cached name: "osm-place" (a named venue) or "address".
+const addressSources = {};
+// Stay names already sent to timeline.savePlacesUrl during this page's life.
+const savedPlaces = new Set();
 
 export default {
   components: {
+    PlaceEditor,
     ChevronDownIcon,
     ChevronLeftIcon,
     ChevronRightIcon,
@@ -265,9 +292,17 @@ export default {
       addresses: { ...addressCache },
       geocodeRun: 0,
       today: moment().startOf("day"),
+      editing: null,
     };
   },
   computed: {
+    canEditPlaces() {
+      return Boolean(
+        this.target &&
+          this.$config.timeline.placeSearchUrl &&
+          this.$config.timeline.placeCorrectionUrl
+      );
+    },
     ...mapState([
       "devices",
       "locationHistory",
@@ -370,12 +405,14 @@ export default {
       immediate: true,
     },
     target() {
+      this.editing = null;
       this.loadMonth();
     },
     month() {
       this.loadMonth();
     },
     day(day) {
+      this.editing = null;
       if (!day.isSame(this.month, "month")) {
         this.month = day.clone().startOf("month");
       }
@@ -403,9 +440,40 @@ export default {
     ...mapMutations({
       setTimelineOpen: types.SET_TIMELINE_OPEN,
       setTimelineHighlight: types.SET_TIMELINE_HIGHLIGHT,
+      setLocationHistory: types.SET_LOCATION_HISTORY,
     }),
     humanReadableDistance,
     humanReadableDuration,
+    editPlace(segment) {
+      this.editing = { ...this.target, segment };
+      this.focus(segment);
+    },
+    previewPlace(place) {
+      const center = { lat: place.lat, lng: place.lon };
+      this.setTimelineHighlight([center]);
+      this.$root.$emit("fitBounds", [center]);
+    },
+    cancelPlaceEdit() {
+      if (this.editing) this.focus(this.editing.segment);
+      this.editing = null;
+    },
+    applyPlaceCorrection(location) {
+      if (!this.editing) return;
+      const { user, device, segment: original } = this.editing;
+      const own = this.locationHistory[user] || {};
+      const locations = (own[device] || []).map((point) =>
+        point.tst === location.tst
+          ? { ...location, departed: point.departed }
+          : point
+      );
+      this.setLocationHistory({
+        ...this.locationHistory,
+        [user]: { ...own, [device]: locations },
+      });
+      this.editing = null;
+      const segment = this.segments.find((s) => s.start === original.start);
+      if (segment) this.focus(segment);
+    },
     formatTime(tst) {
       return moment.unix(tst).format("LT");
     },
@@ -423,12 +491,13 @@ export default {
     async lookupAddresses() {
       const { reverseGeocodeUrl: template, reverseGeocodeDelay } =
         this.$config.timeline;
-      if (!template) return;
       const run = ++this.geocodeRun;
-      const pending = this.segments
-        .filter((s) => s.type === "stay" && !s.place)
-        .map((s) => s.center)
-        .filter((c) => !(coordinateKey(c) in addressCache));
+      const pending = !template
+        ? []
+        : this.segments
+            .filter((s) => s.type === "stay" && !s.place)
+            .map((s) => s.center)
+            .filter((c) => !(coordinateKey(c) in addressCache));
       for (const center of pending) {
         const key = coordinateKey(center);
         if (run !== this.geocodeRun) return;
@@ -440,7 +509,10 @@ export default {
             headers: { Accept: "application/json" },
           });
           if (response.ok) {
-            addressCache[key] = addressLabel(await response.json());
+            const body = await response.json();
+            addressCache[key] = addressLabel(body);
+            addressSources[key] =
+              body && body.source === "osm-place" ? "osm-place" : "address";
           } else {
             log(
               "TIMELINE",
@@ -453,6 +525,60 @@ export default {
         if (key in addressCache)
           this.$set(this.addresses, key, addressCache[key]);
         await sleep(reverseGeocodeDelay);
+      }
+      if (run === this.geocodeRun) await this.savePlaces();
+    },
+    /**
+     * Send the names of ended stays (not today's ongoing one) that are not
+     * stored yet to timeline.savePlacesUrl, keyed by the stay's first
+     * location. Coordinates are never sent as a name.
+     */
+    async savePlaces() {
+      const url = this.$config.timeline.savePlacesUrl;
+      if (!url || !this.target) return;
+      const { device } = this.target;
+      const places = this.segments
+        .filter((s) => s.type === "stay" && !(this.isToday && s.endIsLast))
+        .map((s) => {
+          if (s.placeSource === "manual") return null;
+          if (s.place) {
+            return s.placeSaved || !s.placeSource
+              ? null
+              : { tst: s.start, place: s.place, source: s.placeSource };
+          }
+          const key = coordinateKey(s.center);
+          return addressCache[key]
+            ? {
+                tst: s.start,
+                place: addressCache[key],
+                source: addressSources[key] || "address",
+              }
+            : null;
+        })
+        .filter(Boolean)
+        .filter(
+          (p) => !savedPlaces.has(`${device}|${p.tst}|${p.source}|${p.place}`)
+        );
+      if (places.length === 0) return;
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ device, places }),
+        });
+        if (response.ok) {
+          places.forEach((p) =>
+            savedPlaces.add(`${device}|${p.tst}|${p.source}|${p.place}`)
+          );
+        } else {
+          log("TIMELINE", `Saving place names: HTTP ${response.status}`);
+        }
+      } catch (error) {
+        log("TIMELINE", error);
       }
     },
     formatCoordinate({ lat, lng }) {
@@ -498,6 +624,7 @@ export default {
      * key is meant for a form field or the map.
      */
     onKeydown(event) {
+      if (this.editing) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       const target = event.target;
@@ -521,7 +648,9 @@ export default {
     },
     focus(segment) {
       const latLngs =
-        segment.type === "stay" ? [segment.center] : segment.latLngs;
+        segment.type === "stay"
+          ? [segment.placeCenter || segment.center]
+          : segment.latLngs;
       this.setTimelineHighlight(latLngs);
       this.$root.$emit("fitBounds", latLngs);
     },
@@ -860,5 +989,12 @@ export default {
 .segment-move .segment-body {
   font-size: 14px;
   opacity: 0.85;
+}
+
+.button.segment-edit {
+  margin: 0 16px 8px 112px;
+  padding: 6px 8px;
+  color: var(--color-primary);
+  font-size: 12px;
 }
 </style>

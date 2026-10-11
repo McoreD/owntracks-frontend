@@ -639,8 +639,28 @@ interest (`poi`) or address (`addr`) of their locations, when available.
     // Milliseconds between reverse geocoding requests (Nominatim's public
     // instance allows at most one request per second)
     reverseGeocodeDelay: 1100,
+    // Optional signed-in endpoints for saving names and correcting a stay.
+    savePlacesUrl: null,
+    placeSearchUrl: null,
+    placeCorrectionUrl: null,
   }
   ```
+
+With `placeSearchUrl` and `placeCorrectionUrl` configured, each stay has an
+**Edit place** button. Search runs when the user presses Search. Results include
+the mapped name, address, distance and an OpenStreetMap link; selecting one
+previews it on the map. Only a selected result can be saved. Corrections take
+priority over automatic names and can be reset with **Use detected place**.
+
+The search endpoint accepts GET `q`, `device`, `tst` and returns `{ results }`.
+Each result has `osmType` (`node`, `way` or `relation`), `osmId`, `name`, `address`,
+`lat`, `lon`, `distance` (meters) and `mapUrl`. The correction endpoint accepts
+POST `{ device, tst, osmType, osmId }` and DELETE `{ device, tst }` to reset, and
+returns `{ location }` in the Recorder location format. The backend must scope
+these requests to the signed-in user and resolve the map reference itself.
+Corrected locations carry `place_source: "manual"` and optionally `place_center`
+as `{ lat, lng }`; their original GPS coordinates and times stay unchanged.
+
 - Example:
   ```js
   // Treat shorter visits as stays, open the panel by default and name

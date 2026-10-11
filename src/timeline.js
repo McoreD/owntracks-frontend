@@ -76,13 +76,41 @@ export const nearestRegion = (center, regions, margin) => {
 };
 
 /**
- * Pick a human-readable name for a group of locations: the most common
- * region name, then a point of interest, then a reverse-geocoded address.
+ * Where a stay's name came from, best first. A saved name (`location.place`)
+ * is only replaced by a name from a better source.
+ */
+export const PLACE_SOURCES = [
+  "manual",
+  "region",
+  "app",
+  "osm-place",
+  "address",
+];
+
+const sourceRank = (source) => {
+  const i = PLACE_SOURCES.indexOf(source);
+  return i === -1 ? PLACE_SOURCES.length : i;
+};
+
+/**
+ * Whether source `a` ranks better than source `b`.
+ *
+ * @param {String|null} a
+ * @param {String|null} b
+ * @returns {Boolean}
+ */
+export const isBetterSource = (a, b) => sourceRank(a) < sourceRank(b);
+
+/**
+ * Pick a human-readable name for a group of locations from what the app
+ * reported: the most common region name, then a point of interest, then an
+ * address.
  *
  * @param {OTLocation[]} points Locations of one stay
- * @returns {String|null} Place name, if any location carries one
+ * @returns {{place: String, source: String}|null}
+ *   Name and its source ("region" or "app"), if any location carries one
  */
-export const placeName = (points) => {
+export const reportedPlace = (points) => {
   const counts = {};
   points.forEach((p) => {
     (p.inregions || []).forEach((r) => {
@@ -90,12 +118,40 @@ export const placeName = (points) => {
     });
   });
   const regions = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-  if (regions.length) return regions[0];
+  if (regions.length) return { place: regions[0], source: "region" };
   const withPoi = points.find((p) => p.poi);
-  if (withPoi) return withPoi.poi;
+  if (withPoi) return { place: withPoi.poi, source: "app" };
   const withAddr = points.find((p) => p.addr);
-  if (withAddr) return withAddr.addr;
+  if (withAddr) return { place: withAddr.addr, source: "app" };
   return null;
+};
+
+/**
+ * Pick a human-readable name for a group of locations: the most common
+ * region name, then a point of interest, then a reverse-geocoded address.
+ *
+ * @param {OTLocation[]} points Locations of one stay
+ * @returns {String|null} Place name, if any location carries one
+ */
+export const placeName = (points) => {
+  const named = reportedPlace(points);
+  return named ? named.place : null;
+};
+
+/**
+ * A name saved for a stay earlier (`place` / `place_source` on a location,
+ * set by the server), preferring the stay's first location.
+ *
+ * @param {OTLocation[]} points Locations of one stay, in time order
+ * @returns {{place: String, source: String|null}|null}
+ */
+export const savedPlace = (points) => {
+  const withPlace =
+    points.find((p) => p.place_source === "manual" && p.place) ||
+    points.find((p) => typeof p.place === "string" && p.place.trim() !== "");
+  return withPlace
+    ? { place: withPlace.place, source: withPlace.place_source || null }
+    : null;
 };
 
 /**
@@ -109,8 +165,15 @@ export const placeName = (points) => {
  *
  * @param {OTLocation[]} locations Locations of a single device
  * @param {Partial<TimelineOptions>} [options]
+ * A location may also carry `place` / `place_source`: a name saved for the
+ * stay that starts there. It is used instead of looking the place up again,
+ * unless the app's own data names the stay from a better source.
+ *
  * @returns {Array<Object>} Segments in chronological order. Stays have
- *   `{ type: "stay", start, end, center, place, count, endIsLast }`, moves have
+ *   `{ type: "stay", start, end, center, place, placeSource, placeSaved,
+ *   count, endIsLast }` (`start` is the time of the stay's first location;
+ *   `placeSaved`: that location already stores this name or a better one),
+ *   moves have
  *   `{ type: "move" | "away", start, end, distance, latLngs }` ("away": left
  *   and returned to the same place). Times are unix seconds.
  */
@@ -215,14 +278,37 @@ export const buildTimeline = (locations, options = {}) => {
       pending.push(...cluster);
       return;
     }
+    const center = centroid(cluster);
+    const region = nearestRegion(center, opts.regions, opts.regionMargin);
+    const reported =
+      reportedPlace(cluster) ||
+      (region ? { place: region, source: "region" } : null);
+    const saved = savedPlace(cluster);
+    const named =
+      saved && !(reported && isBetterSource(reported.source, saved.source))
+        ? saved
+        : reported;
+    const first = cluster[0];
+    const manual = cluster.find((p) => p.place_source === "manual");
     const stay = {
       type: "stay",
       start,
       end,
-      center: centroid(cluster),
-      place:
-        placeName(cluster) ||
-        nearestRegion(centroid(cluster), opts.regions, opts.regionMargin),
+      center,
+      place: named ? named.place : null,
+      placeSource: named ? named.source : null,
+      // A map-verified correction selects the venue without changing GPS.
+      placeCenter:
+        named && named.source === "manual"
+          ? manual?.place_center || null
+          : null,
+      placeTst: named && named.source === "manual" ? manual.tst : start,
+      placeSaved: Boolean(
+        named &&
+          typeof first.place === "string" &&
+          first.place.trim() !== "" &&
+          !isBetterSource(named.source, first.place_source || null)
+      ),
       count: cluster.length,
       endIsLast: isLast,
     };

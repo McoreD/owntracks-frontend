@@ -6,8 +6,10 @@ import {
   coordinateKey,
   countByDay,
   humanReadableDuration,
+  isBetterSource,
   nearestRegion,
   placeName,
+  savedPlace,
 } from "@/timeline";
 
 // Roughly 0.001 degrees latitude = 111 m.
@@ -21,6 +23,38 @@ const at = (place, minutes, extra = {}) => ({
 });
 
 describe("buildTimeline", () => {
+  test("a mapped correction wins over region guesses and preserves GPS and times", () => {
+    const points = [
+      at(HOME, 0, {
+        inregions: ["Muzz Buzz"],
+        place: "Riverton Fresh IGA",
+        place_source: "manual",
+        place_center: { lat: HOME.lat + 0.001, lng: HOME.lon },
+      }),
+      at(HOME, 30, { inregions: ["Muzz Buzz"] }),
+    ];
+    const before = JSON.stringify(points);
+    const [stay] = buildTimeline(points);
+    expect(stay.place).toBe("Riverton Fresh IGA");
+    expect(stay.placeSource).toBe("manual");
+    expect(stay.placeSaved).toBe(true);
+    expect(stay.placeCenter).toEqual({ lat: HOME.lat + 0.001, lng: HOME.lon });
+    expect(stay.center).toEqual({ lat: HOME.lat, lng: HOME.lon });
+    expect(stay.start).toBe(T0);
+    expect(stay.end).toBe(T0 + 30 * 60);
+    expect(JSON.stringify(points)).toBe(before);
+  });
+
+  test("a correction stays attached when a cluster gains an earlier point", () => {
+    const [stay] = buildTimeline([
+      at(HOME, 0, { place: "Muzz Buzz", place_source: "address" }),
+      at(HOME, 15, { place: "Riverton Fresh IGA", place_source: "manual" }),
+      at(HOME, 30),
+    ]);
+    expect(stay.place).toBe("Riverton Fresh IGA");
+    expect(stay.start).toBe(T0);
+    expect(stay.placeTst).toBe(T0 + 15 * 60);
+  });
   test("no locations", () => {
     expect(buildTimeline([])).toEqual([]);
   });
@@ -81,17 +115,17 @@ describe("regions", () => {
   test("names stays without inregions from the nearest region", () => {
     const segments = buildTimeline(
       [at(HOME, 0), at(HOME, 30), at(WORK, 60), at(WORK, 120)],
-      { regions }
+      { regions },
     );
     expect(
-      segments.filter((s) => s.type === "stay").map((s) => s.place)
+      segments.filter((s) => s.type === "stay").map((s) => s.place),
     ).toEqual(["Home", "Work"]);
   });
 
   test("inregions from the app wins over the distance match", () => {
     const segments = buildTimeline(
       [at(HOME, 0, { inregions: ["Flat"] }), at(HOME, 30)],
-      { regions }
+      { regions },
     );
     expect(segments[0].place).toBe("Flat");
   });
@@ -113,11 +147,81 @@ describe("placeName", () => {
         { inregions: ["A"] },
         { inregions: ["B", "A"] },
         { poi: "Cafe" },
-      ])
+      ]),
     ).toBe("A");
     expect(placeName([{ addr: "Main St" }, { poi: "Cafe" }])).toBe("Cafe");
     expect(placeName([{ addr: "Main St" }])).toBe("Main St");
     expect(placeName([{}])).toBe(null);
+  });
+});
+
+describe("saved place names", () => {
+  test("a saved name is used and marked as saved on the first location", () => {
+    const segments = buildTimeline([
+      at(HOME, 0, { place: "Silver Sushi", place_source: "osm-place" }),
+      at(HOME, 30),
+    ]);
+    expect(segments[0].place).toBe("Silver Sushi");
+    expect(segments[0].placeSource).toBe("osm-place");
+    expect(segments[0].placeSaved).toBe(true);
+    expect(segments[0].start).toBe(T0);
+  });
+
+  test("unnamed stays are not saved, named ones report their source", () => {
+    const [unnamed] = buildTimeline([at(HOME, 0), at(HOME, 30)]);
+    expect(unnamed.place).toBe(null);
+    expect(unnamed.placeSource).toBe(null);
+    expect(unnamed.placeSaved).toBe(false);
+    const [region] = buildTimeline([at(HOME, 0), at(HOME, 30)], {
+      regions: [
+        { desc: "BETU3 · Home", lat: HOME.lat, lon: HOME.lon, rad: 50 },
+      ],
+    });
+    expect(region.place).toBe("BETU3 · Home");
+    expect(region.placeSource).toBe("region");
+    expect(region.placeSaved).toBe(false);
+  });
+
+  test("a better source from the app replaces a saved address", () => {
+    const [stay] = buildTimeline([
+      at(HOME, 0, { place: "12 Main St", place_source: "address" }),
+      at(HOME, 30, { inregions: ["Home"] }),
+    ]);
+    expect(stay.place).toBe("Home");
+    expect(stay.placeSource).toBe("region");
+    expect(stay.placeSaved).toBe(false);
+  });
+
+  test("a saved region name is kept over an equal-rank region match", () => {
+    const [stay] = buildTimeline(
+      [
+        at(HOME, 0, { place: "BETU3 · Home", place_source: "region" }),
+        at(HOME, 30),
+      ],
+      { regions: [{ desc: "BETU3", lat: HOME.lat, lon: HOME.lon, rad: 50 }] },
+    );
+    expect(stay.place).toBe("BETU3 · Home");
+    expect(stay.placeSaved).toBe(true);
+  });
+
+  test("a name saved on a later point is used but still needs saving", () => {
+    const [stay] = buildTimeline([
+      at(HOME, 0),
+      at(HOME, 30, { place: "IGA", place_source: "osm-place" }),
+    ]);
+    expect(stay.place).toBe("IGA");
+    expect(stay.placeSaved).toBe(false);
+  });
+
+  test("helpers", () => {
+    expect(isBetterSource("region", "address")).toBe(true);
+    expect(isBetterSource("osm-place", "osm-place")).toBe(false);
+    expect(isBetterSource("address", null)).toBe(true);
+    expect(savedPlace([{}, { place: " " }])).toBe(null);
+    expect(savedPlace([{ place: "IGA" }])).toEqual({
+      place: "IGA",
+      source: null,
+    });
   });
 });
 
@@ -139,13 +243,13 @@ describe("humanReadableDuration", () => {
 describe("addressLabel", () => {
   test("named places, streets, areas and fallbacks", () => {
     expect(
-      addressLabel({ name: "Kings Park", address: { suburb: "West Perth" } })
+      addressLabel({ name: "Kings Park", address: { suburb: "West Perth" } }),
     ).toBe("Kings Park, West Perth");
     expect(
       addressLabel({
         name: "",
         address: { house_number: "12", road: "Hay Street", suburb: "Subiaco" },
-      })
+      }),
     ).toBe("12 Hay Street, Subiaco");
     expect(addressLabel({ address: { suburb: "Subiaco" } })).toBe("Subiaco");
     expect(addressLabel({ display_name: "A, B, C, D" })).toBe("A, B");
@@ -155,7 +259,7 @@ describe("addressLabel", () => {
 
   test("coordinateKey rounds to 4 decimals", () => {
     expect(coordinateKey({ lat: -31.953512, lng: 115.857048 })).toBe(
-      "-31.9535,115.8570"
+      "-31.9535,115.8570",
     );
   });
 });
