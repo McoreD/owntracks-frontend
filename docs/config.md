@@ -643,6 +643,10 @@ interest (`poi`) or address (`addr`) of their locations, when available.
     savePlacesUrl: null,
     placeSearchUrl: null,
     placeCorrectionUrl: null,
+    // Optional Places catalogue and signed-in visit-history endpoints.
+    placesUrl: null,
+    placesApiUrl: null,
+    placeVisitsUrl: null,
   }
   ```
 
@@ -661,6 +665,24 @@ returns `{ location }` in the Recorder location format. The backend must scope
 these requests to the signed-in user and resolve the map reference itself.
 Corrected locations carry `place_source: "manual"` and optionally `place_center`
 as `{ lat, lng }`; their original GPS coordinates and times stay unchanged.
+
+With `placesUrl`, `placesApiUrl` and `placeVisitsUrl` configured, **Past visits**
+appears beside **Edit place**. It expands the newest visits beneath a stay, with
+arrival, departure, duration, **Open day**, and **Open in Places** links. The
+`/places` view lists visited places, searches saved names, and sorts by last visit,
+visit count or name. Add a `headerLinks` entry pointing to `placesUrl` to expose it
+in the header. Visits use the browser's local time zone.
+
+The catalogue endpoint accepts GET `q`, `sort` (`recent`, `visits`, `name`),
+`offset`, and `limit`. It returns `{ places, total, nextOffset, totals }`, with
+`totals: { places, visits, named }`. Each place has `key`, `name`, `named`,
+`lat`, `lon`, `mapUrl`, `visitCount`, `firstVisit`, `lastVisit`, `totalSeconds`
+and `mapped`. The history endpoint accepts GET `key`, or `device` and `tst` for
+a stay, plus `offset` and `limit`. It returns `{ place, visits, total, nextOffset,
+nearby }`. Visits have `user`, `device`, `start`, `end` (Unix seconds), `source`,
+`estimated` and `ongoing`. `nextOffset: null` marks the last page; `place: null`
+means no indexed visit contains the stay. `nearby` is an optional list of separate
+unnamed locations. All data and key lookups must belong to the signed-in user.
 
 - Example:
   ```js

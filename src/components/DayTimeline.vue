@@ -207,14 +207,41 @@
             </template>
           </span>
         </button>
-        <button
-          v-if="segment.type === 'stay' && canEditPlaces"
-          class="button button-flat segment-edit"
-          :aria-label="$t('Edit place: {place}', { place: stayLabel(segment) })"
-          @click="editPlace(segment)"
-        >
-          {{ $t("Edit place") }}
-        </button>
+        <div v-if="segment.type === 'stay'" class="segment-actions">
+          <button
+            v-if="segment.type === 'stay' && canEditPlaces"
+            class="button button-flat segment-edit"
+            :aria-label="
+              $t('Edit place: {place}', { place: stayLabel(segment) })
+            "
+            @click="editPlace(segment)"
+          >
+            {{ $t("Edit place") }}
+          </button>
+          <button
+            v-if="canShowVisits"
+            class="button button-flat segment-edit"
+            :aria-expanded="visiting === segment.start ? 'true' : 'false'"
+            :aria-label="
+              $t('Past visits: {place}', { place: stayLabel(segment) })
+            "
+            @click="
+              visiting = visiting === segment.start ? null : segment.start
+            "
+          >
+            {{ $t("Past visits") }}
+          </button>
+        </div>
+        <PlaceVisits
+          v-if="visiting === segment.start && target"
+          :key="[target.device, segment.start, segment.place].join('/')"
+          class="segment-visits"
+          :device="target.device"
+          :tst="segment.placeTst || segment.start"
+          :api-url="$config.timeline.placeVisitsUrl"
+          :places-url="$config.timeline.placesUrl"
+          compact
+        />
         <PlaceEditor
           v-if="editing && editing.segment.start === segment.start"
           :key="`${editing.user}/${editing.device}/${segment.start}`"
@@ -247,6 +274,7 @@ import {
 
 import * as api from "@/api";
 import PlaceEditor from "@/components/PlaceEditor.vue";
+import PlaceVisits from "@/components/PlaceVisits.vue";
 import { DATE_TIME_FORMAT } from "@/constants";
 import { log } from "@/logging";
 import * as types from "@/store/mutation-types";
@@ -273,6 +301,7 @@ const savedPlaces = new Set();
 export default {
   components: {
     PlaceEditor,
+    PlaceVisits,
     ChevronDownIcon,
     ChevronLeftIcon,
     ChevronRightIcon,
@@ -293,9 +322,17 @@ export default {
       geocodeRun: 0,
       today: moment().startOf("day"),
       editing: null,
+      visiting: null,
     };
   },
   computed: {
+    canShowVisits() {
+      return Boolean(
+        this.target &&
+          this.$config.timeline.placeVisitsUrl &&
+          this.$config.timeline.placesUrl
+      );
+    },
     canEditPlaces() {
       return Boolean(
         this.target &&
@@ -406,6 +443,7 @@ export default {
     },
     target() {
       this.editing = null;
+      this.visiting = null;
       this.loadMonth();
     },
     month() {
@@ -413,6 +451,7 @@ export default {
     },
     day(day) {
       this.editing = null;
+      this.visiting = null;
       if (!day.isSame(this.month, "month")) {
         this.month = day.clone().startOf("month");
       }
@@ -992,9 +1031,18 @@ export default {
 }
 
 .button.segment-edit {
-  margin: 0 16px 8px 112px;
+  margin: 0;
   padding: 6px 8px;
   color: var(--color-primary);
   font-size: 12px;
+}
+.segment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 16px 8px 112px;
+}
+.segment-visits {
+  margin: 0 12px 12px;
 }
 </style>

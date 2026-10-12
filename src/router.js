@@ -10,6 +10,11 @@ export default new Router({
   base: config.router.basePath,
   routes: [
     {
+      path: "/places",
+      name: "places",
+      component: () => import("@/views/Places.vue"),
+    },
+    {
       path: "/",
       name: "map",
       component: Map,

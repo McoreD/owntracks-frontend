@@ -30,6 +30,8 @@ describe("buildTimeline", () => {
         place: "Riverton Fresh IGA",
         place_source: "manual",
         place_center: { lat: HOME.lat + 0.001, lng: HOME.lon },
+        place_osm_type: "node",
+        place_osm_id: 123,
       }),
       at(HOME, 30, { inregions: ["Muzz Buzz"] }),
     ];
@@ -39,6 +41,8 @@ describe("buildTimeline", () => {
     expect(stay.placeSource).toBe("manual");
     expect(stay.placeSaved).toBe(true);
     expect(stay.placeCenter).toEqual({ lat: HOME.lat + 0.001, lng: HOME.lon });
+    expect(stay.placeOsmType).toBe("node");
+    expect(stay.placeOsmId).toBe(123);
     expect(stay.center).toEqual({ lat: HOME.lat, lng: HOME.lon });
     expect(stay.start).toBe(T0);
     expect(stay.end).toBe(T0 + 30 * 60);

@@ -1,9 +1,16 @@
 <template>
   <div id="app">
-    <AppHeader />
+    <header v-if="$route.name === 'places'" class="places-header">
+      <a :href="$config.router.basePath">{{ $t("Timeline") }}</a>
+      <strong>{{ $t("Places") }}</strong>
+      <a v-if="$config.accountUrl" :href="$config.accountUrl">
+        {{ $t("Account") }}
+      </a>
+    </header>
+    <AppHeader v-else />
     <main>
       <router-view />
-      <DayTimeline v-if="$store.state.timeline.open" />
+      <DayTimeline v-if="$route.name === 'map' && $store.state.timeline.open" />
     </main>
     <InformationModal />
     <LoadingModal />
@@ -28,7 +35,7 @@ export default {
       this.$config.primaryColor
     );
     this.populateStateFromQuery(this.$route.query);
-    this.loadData();
+    if (this.$route.name === "map") this.loadData();
     // Update URL query params when relevant values changes
     this.$store.subscribe((mutation) => {
       if (
@@ -62,6 +69,7 @@ export default {
      * of the relevant values change in the Vuex store.
      */
     updateUrlQuery() {
+      if (this.$route.name !== "map") return;
       const {
         map,
         startDateTime: start,
@@ -97,4 +105,16 @@ export default {
 
 <style lang="scss">
 @import "styles/main";
+.places-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 24px;
+}
+.places-header a {
+  color: var(--color-primary-text);
+}
+.places-header strong {
+  flex: 1;
+}
 </style>
