@@ -669,15 +669,21 @@ as `{ lat, lng }`; their original GPS coordinates and times stay unchanged.
 With `placesUrl`, `placesApiUrl` and `placeVisitsUrl` configured, **Past visits**
 appears beside **Edit place**. It expands the newest visits beneath a stay, with
 arrival, departure, duration, **Open day**, and **Open in Places** links. The
-`/places` view lists visited places, searches saved names, and sorts by last visit,
-visit count or name. Add a `headerLinks` entry pointing to `placesUrl` to expose it
+`/places` view groups places alphabetically by default, with A–Z filters, a
+separate unnamed group, and 40 places per page. Previous/Next controls and a
+direct page jump work across the full catalogue; search runs on all matching
+places, not just the current page. It also sorts by last visit or visit count.
+Add a `headerLinks` entry pointing to `placesUrl` to expose it
 in the header. Visits use the browser's local time zone.
 
 The catalogue endpoint accepts GET `q`, `sort` (`recent`, `visits`, `name`),
-`offset`, and `limit`. It returns `{ places, total, nextOffset, totals }`, with
+`group` (`A`–`Z`, `#` for other names, `unnamed`, or empty for all), `offset`,
+and `limit`. It returns `{ places, total, nextOffset, totals, groups }`, with
+`groups: [{ key, count }]` counting all matches for the search before the group
+filter. The default sort is `name`.
 `totals: { places, visits, named }`. Each place has `key`, `name`, `named`,
 `lat`, `lon`, `mapUrl`, `visitCount`, `firstVisit`, `lastVisit`, `totalSeconds`
-and `mapped`. The history endpoint accepts GET `key`, or `device` and `tst` for
+`mapped` and `group`. The history endpoint accepts GET `key`, or `device` and `tst` for
 a stay, plus `offset` and `limit`. It returns `{ place, visits, total, nextOffset,
 nearby }`. Visits have `user`, `device`, `start`, `end` (Unix seconds), `source`,
 `estimated` and `ongoing`. `nextOffset: null` marks the last page; `place: null`

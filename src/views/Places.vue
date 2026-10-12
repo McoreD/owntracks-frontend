@@ -8,8 +8,12 @@
       </p>
     </div>
     <div v-if="configured" class="places-layout">
-      <section class="places-catalog" :aria-label="$t('Visited places')">
-        <form class="places-filters" @submit.prevent="load()">
+      <section
+        ref="catalog"
+        class="places-catalog"
+        :aria-label="$t('Visited places')"
+      >
+        <form class="places-filters" @submit.prevent="search()">
           <input
             v-model="query"
             type="search"
@@ -23,11 +27,66 @@
             :aria-label="$t('Sort places')"
             @change="load()"
           >
+            <option value="name">{{ $t("Alphabetical") }}</option>
             <option value="recent">{{ $t("Most recent") }}</option>
             <option value="visits">{{ $t("Most visited") }}</option>
-            <option value="name">{{ $t("Name") }}</option>
           </select>
         </form>
+        <nav class="places-alphabet" :aria-label="$t('Browse by letter')">
+          <button
+            v-for="letter in letters"
+            :key="letter || 'all'"
+            :class="{ active: group === letter, unnamed: letter === 'unnamed' }"
+            :disabled="loading || (letter !== '' && !groupCount(letter))"
+            :aria-pressed="group === letter ? 'true' : 'false'"
+            :title="$t('{count} places', { count: groupCount(letter) })"
+            @click="browse(letter)"
+          >
+            {{ letter === "unnamed" ? $t("Unnamed") : letter || $t("All") }}
+            <small v-if="letter === 'unnamed'">{{ groupCount(letter) }}</small>
+          </button>
+        </nav>
+        <nav v-if="total" class="places-pagination" :aria-label="$t('Pages')">
+          <p aria-live="polite">
+            {{ $t("Showing {from}–{to} of {total}", range) }}
+          </p>
+          <div class="places-page-buttons">
+            <button
+              class="button"
+              :disabled="loading || offset === 0"
+              @click="pageTo(Math.max(0, offset - pageSize))"
+            >
+              {{ $t("Previous") }}
+            </button>
+            <span>
+              {{ $t("Page {page} of {pages}", { page, pages: pageCount }) }}
+            </span>
+            <button
+              class="button"
+              :disabled="loading || nextOffset === null"
+              @click="pageTo(nextOffset)"
+            >
+              {{ $t("Next") }}
+            </button>
+          </div>
+          <form
+            v-if="pageCount > 1"
+            class="places-page-jump"
+            @submit.prevent="jump()"
+          >
+            <label for="places-page">{{ $t("Go to page") }}</label>
+            <input
+              id="places-page"
+              v-model.number="pageInput"
+              type="number"
+              min="1"
+              :max="pageCount"
+              :disabled="loading"
+              required
+            />
+            <button class="button" :disabled="loading">{{ $t("Go") }}</button>
+          </form>
+        </nav>
         <p v-if="error" role="alert">
           {{ error }}
           <button class="button" @click="load()">{{ $t("Retry") }}</button>
@@ -37,7 +96,13 @@
         </p>
         <p v-else-if="!places.length">{{ $t("No places found.") }}</p>
         <ol class="places-list">
-          <li v-for="place in places" :key="place.key">
+          <li v-for="(place, index) in places" :key="place.key">
+            <h2
+              v-if="sort === 'name' && beginsGroup(index)"
+              class="places-group"
+            >
+              {{ groupLabel(placeGroup(place)) }}
+            </h2>
             <button
               :aria-pressed="selected === place.key ? 'true' : 'false'"
               :class="{ selected: selected === place.key }"
@@ -54,14 +119,31 @@
             </button>
           </li>
         </ol>
-        <button
-          v-if="nextOffset !== null"
-          class="button"
-          :disabled="loading"
-          @click="load(nextOffset)"
+        <nav
+          v-if="pageCount > 1"
+          class="places-pagination"
+          :aria-label="$t('More pages')"
         >
-          {{ loading ? $t("Loading...") : $t("More places") }}
-        </button>
+          <div class="places-page-buttons">
+            <button
+              class="button"
+              :disabled="loading || offset === 0"
+              @click="pageTo(Math.max(0, offset - pageSize))"
+            >
+              {{ $t("Previous") }}
+            </button>
+            <span>
+              {{ $t("Page {page} of {pages}", { page, pages: pageCount }) }}
+            </span>
+            <button
+              class="button"
+              :disabled="loading || nextOffset === null"
+              @click="pageTo(nextOffset)"
+            >
+              {{ $t("Next") }}
+            </button>
+          </div>
+        </nav>
         <p class="places-note">
           {{ $t("Unnamed places show coordinates. Open a day to name them.") }}
         </p>
@@ -101,13 +183,34 @@ export default {
       total: 0,
       nextOffset: null,
       query: "",
-      sort: "recent",
+      sort: "name",
+      group: "",
+      groups: [],
+      offset: 0,
+      pageSize: 40,
+      pageInput: 1,
       loading: false,
       error: "",
       controller: null,
     };
   },
   computed: {
+    letters() {
+      return ["", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#", "unnamed"];
+    },
+    page() {
+      return Math.floor(this.offset / this.pageSize) + 1;
+    },
+    pageCount() {
+      return Math.max(1, Math.ceil(this.total / this.pageSize));
+    },
+    range() {
+      return {
+        from: this.offset + 1,
+        to: this.offset + this.places.length,
+        total: this.total,
+      };
+    },
     selected() {
       return typeof this.$route.query.place === "string"
         ? this.$route.query.place
@@ -131,6 +234,51 @@ export default {
     if (this.controller) this.controller.abort();
   },
   methods: {
+    groupCount(key) {
+      if (!key) return this.groups.reduce((sum, g) => sum + g.count, 0);
+      return this.groups.find((g) => g.key === key)?.count || 0;
+    },
+    placeGroup(place) {
+      if (place.group) return place.group;
+      const first = place.named
+        ? place.name.trim().charAt(0).toUpperCase()
+        : "";
+      return first ? (/^[A-Z]$/.test(first) ? first : "#") : "unnamed";
+    },
+    groupLabel(key) {
+      return key === "unnamed"
+        ? this.$t("Unnamed places")
+        : key === "#"
+          ? this.$t("Other names")
+          : key;
+    },
+    beginsGroup(index) {
+      return (
+        index === 0 ||
+        this.placeGroup(this.places[index]) !==
+          this.placeGroup(this.places[index - 1])
+      );
+    },
+    search() {
+      this.group = "";
+      this.load();
+    },
+    browse(key) {
+      this.group = key;
+      this.sort = "name";
+      this.load();
+    },
+    jump() {
+      const page = Math.min(
+        this.pageCount,
+        Math.max(1, Math.floor(Number(this.pageInput) || 1))
+      );
+      this.pageTo((page - 1) * this.pageSize);
+    },
+    pageTo(offset) {
+      this.load(offset);
+      this.$refs.catalog.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
     date(tst) {
       return moment.unix(tst).format("ll");
     },
@@ -150,10 +298,7 @@ export default {
       this.controller = controller;
       this.loading = true;
       this.error = "";
-      if (!offset) {
-        this.places = [];
-        this.nextOffset = null;
-      }
+      this.places = [];
       try {
         const url = new URL(
           this.$config.timeline.placesApiUrl,
@@ -161,19 +306,21 @@ export default {
         );
         url.searchParams.set("q", this.query.trim());
         url.searchParams.set("sort", this.sort);
+        url.searchParams.set("group", this.group);
+        url.searchParams.set("limit", this.pageSize);
         url.searchParams.set("offset", offset);
         const response = await fetch(url, { signal: controller.signal });
         const body = await response.json();
         if (!response.ok)
           throw new Error(body.error || this.$t("Could not load places"));
         if (controller.signal.aborted) return;
-        const all = offset ? [...this.places, ...body.places] : body.places;
-        this.places = all.filter(
-          (p, i) => all.findIndex((v) => v.key === p.key) === i
-        );
+        this.places = body.places;
         this.total = body.total;
+        this.groups = body.groups || [];
         this.totals = body.totals;
         this.nextOffset = body.nextOffset;
+        this.offset = offset;
+        this.pageInput = this.page;
       } catch (error) {
         if (!controller.signal.aborted) this.error = error.message;
       } finally {
@@ -235,6 +382,75 @@ export default {
   border-radius: 6px;
   background: var(--color-background);
 }
+.places-alphabet {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 14px;
+}
+.places-alphabet button {
+  min-height: 36px;
+  border: 1px solid var(--color-separator);
+  border-radius: 5px;
+  font: inherit;
+  color: inherit;
+  background: var(--color-background);
+  cursor: pointer;
+}
+.places-alphabet button.active {
+  color: var(--color-primary-text);
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.places-alphabet button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.places-alphabet .unnamed {
+  grid-column: 1 / -1;
+}
+.places-alphabet small {
+  margin-left: 6px;
+}
+.places-group {
+  font-size: 15px;
+  padding: 10px 0;
+}
+.places-pagination {
+  margin: 16px 0;
+}
+.places-pagination p {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 8px;
+}
+.places-page-buttons {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+.places-page-buttons .button {
+  padding: 6px 10px;
+}
+.places-page-buttons span {
+  font-size: 12px;
+}
+.places-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.places-page-jump input {
+  width: 60px;
+  padding: 6px;
+  border: 1px solid var(--color-separator);
+  border-radius: 4px;
+  color: inherit;
+  background: var(--color-background);
+  font: inherit;
+}
 .places-filters select {
   width: 100%;
 }
@@ -267,6 +483,12 @@ export default {
   font-size: 12px;
   opacity: 0.7;
 }
+.places-history {
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 150px);
+  overflow-y: auto;
+}
 .places-empty {
   border: 1px dashed var(--color-separator);
   border-radius: 6px;
@@ -277,6 +499,11 @@ export default {
 @media (max-width: 700px) {
   .places-view {
     padding: 16px;
+  }
+  .places-history {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
   }
   .places-layout {
     grid-template-columns: 1fr;
